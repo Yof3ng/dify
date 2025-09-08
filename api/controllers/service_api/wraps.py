@@ -16,8 +16,7 @@ from werkzeug.exceptions import Forbidden, NotFound, Unauthorized
 from extensions.ext_database import db
 from extensions.ext_redis import redis_client
 from libs.datetime_utils import naive_utc_now
-from libs.login import _get_user
-from models.account import Account, Tenant, TenantAccountJoin, TenantStatus
+from models.account import Account, Tenant, TenantStatus
 from models.dataset import Dataset, RateLimitLog
 from models.model import ApiToken, App, EndUser
 from services.feature_service import FeatureService
@@ -193,26 +192,14 @@ def validate_dataset_token(view=None):
         @wraps(view)
         def decorated(*args, **kwargs):
             api_token = validate_and_get_api_token("dataset")
-            tenant_account_join = (
-                db.session.query(Tenant, TenantAccountJoin)
-                .where(Tenant.id == api_token.tenant_id)
-                .where(TenantAccountJoin.tenant_id == Tenant.id)
-                .where(TenantAccountJoin.role.in_(["owner"]))
-                .where(Tenant.status == TenantStatus.NORMAL)
-                .one_or_none()
-            )  # TODO: only owner information is required, so only one is returned.
-            if tenant_account_join:
-                tenant, ta = tenant_account_join
-                account = db.session.query(Account).where(Account.id == ta.account_id).first()
-                # Login admin
-                if account:
-                    account.current_tenant = tenant
-                    current_app.login_manager._update_request_context_with_user(account)  # type: ignore
-                    user_logged_in.send(current_app._get_current_object(), user=_get_user())  # type: ignore
-                else:
-                    raise Unauthorized("Tenant owner account does not exist.")
-            else:
-                raise Unauthorized("Tenant does not exist.")
+            
+            # Validate tenant exists and is not archived
+            tenant = db.session.query(Tenant).where(Tenant.id == api_token.tenant_id).first()
+            if tenant is None:
+                raise ValueError("Tenant does not exist.")
+            if tenant.status == TenantStatus.ARCHIVE:
+                raise Forbidden("The workspace's status is archived.")
+                
             return view(api_token.tenant_id, *args, **kwargs)
 
         return decorated
